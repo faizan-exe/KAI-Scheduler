@@ -13,16 +13,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	commonconstants "github.com/NVIDIA/KAI-scheduler/pkg/common/constants"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/actions/common/solvers/scenario"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/common_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/node_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/pod_affinity"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/pod_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/podgroup_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/resource_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/framework"
+	commonconstants "github.com/kai-scheduler/KAI-scheduler/pkg/common/constants"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/actions/common/solvers/scenario"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/common_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/node_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/pod_affinity"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/pod_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/podgroup_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/resource_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/framework"
 )
 
 func Test_orderedInsert(t *testing.T) {
@@ -103,138 +103,96 @@ func Test_orderedInsert(t *testing.T) {
 	}
 }
 
-func TestAccumulatedIdleGpus_matchRelevantNodeToTask(t *testing.T) {
-	type fields struct {
-		nodesNameToIdleGpus   map[string]float64
-		maxFreeGpuNodesSorted []string
-	}
+func Test_greedyMatchRequirements(t *testing.T) {
 	type args struct {
-		pendingTaskGpus  float64
-		filterMatchState matchingState
-	}
-	type want struct {
-		canAllocate                   bool
-		nodesToVirtuallyAllocatedGpus map[string]float64
+		requirements []float64
+		holders      []string
+		capacity     map[string]float64
 	}
 	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   want
+		name string
+		args args
+		want bool
 	}{
 		{
-			name: "match to free node",
-			fields: fields{
-				nodesNameToIdleGpus: map[string]float64{
-					"n1": 1.0,
-				},
-				maxFreeGpuNodesSorted: []string{"n1"},
-			},
+			name: "empty requirements always match",
 			args: args{
-				pendingTaskGpus: 0.5,
-				filterMatchState: matchingState{
-					nodesToVirtuallyAllocatedGpus: map[string]float64{},
-				},
+				requirements: []float64{},
+				holders:      []string{"n1"},
+				capacity:     map[string]float64{"n1": 1.0},
 			},
-			want: want{
-				canAllocate:                   true,
-				nodesToVirtuallyAllocatedGpus: map[string]float64{"n1": 0.5},
-			},
+			want: true,
 		},
 		{
-			name: "cannot match to node with no gpus",
-			fields: fields{
-				nodesNameToIdleGpus: map[string]float64{
-					"n1": 0.0,
-				},
-				maxFreeGpuNodesSorted: []string{"n1"},
-			},
+			name: "zero requirements are skipped",
 			args: args{
-				pendingTaskGpus: 0.5,
-				filterMatchState: matchingState{
-					nodesToVirtuallyAllocatedGpus: map[string]float64{},
-				},
+				requirements: []float64{0, 0},
+				holders:      []string{},
+				capacity:     map[string]float64{},
 			},
-			want: want{
-				canAllocate:                   false,
-				nodesToVirtuallyAllocatedGpus: map[string]float64{},
-			},
+			want: true,
 		},
 		{
-			name: "cannot match to node full with virtual allocations",
-			fields: fields{
-				nodesNameToIdleGpus: map[string]float64{
-					"n1": 1.0,
-				},
-				maxFreeGpuNodesSorted: []string{"n1"},
-			},
+			name: "single requirement matched to holder",
 			args: args{
-				pendingTaskGpus: 0.5,
-				filterMatchState: matchingState{
-					nodesToVirtuallyAllocatedGpus: map[string]float64{"n1": 1.0},
-				},
+				requirements: []float64{0.5},
+				holders:      []string{"n1"},
+				capacity:     map[string]float64{"n1": 1.0},
 			},
-			want: want{
-				canAllocate:                   false,
-				nodesToVirtuallyAllocatedGpus: map[string]float64{"n1": 1.0},
-			},
+			want: true,
 		},
 		{
-			name: "match the second node",
-			fields: fields{
-				nodesNameToIdleGpus: map[string]float64{
-					"n1": 1.0,
-					"n2": 2.0,
-				},
-				maxFreeGpuNodesSorted: []string{"n2", "n1"},
-			},
+			name: "single requirement exceeds holder capacity",
 			args: args{
-				pendingTaskGpus: 0.5,
-				filterMatchState: matchingState{
-					nodesToVirtuallyAllocatedGpus: map[string]float64{"n1": 0.5},
-				},
+				requirements: []float64{0.5},
+				holders:      []string{"n1"},
+				capacity:     map[string]float64{"n1": 0.0},
 			},
-			want: want{
-				canAllocate:                   true,
-				nodesToVirtuallyAllocatedGpus: map[string]float64{"n1": 0.5, "n2": 0.5},
-			},
+			want: false,
 		},
 		{
-			name: "append to nodesToVirtuallyAllocatedGpus",
-			fields: fields{
-				nodesNameToIdleGpus: map[string]float64{
-					"n1": 1.0,
-					"n2": 2.0,
-				},
-				maxFreeGpuNodesSorted: []string{"n2", "n1"},
-			},
+			name: "virtual allocation prevents double-use of same holder",
 			args: args{
-				pendingTaskGpus: 0.5,
-				filterMatchState: matchingState{
-					nodesToVirtuallyAllocatedGpus: map[string]float64{"n2": 0.5},
-				},
+				requirements: []float64{1.0, 0.5},
+				holders:      []string{"n1"},
+				capacity:     map[string]float64{"n1": 1.0},
 			},
-			want: want{
-				canAllocate:                   true,
-				nodesToVirtuallyAllocatedGpus: map[string]float64{"n2": 1.0},
+			want: false,
+		},
+		{
+			name: "bin-packing: two requirements fit in one holder",
+			args: args{
+				requirements: []float64{1.0, 0.5},
+				holders:      []string{"n1"},
+				capacity:     map[string]float64{"n1": 1.5},
 			},
+			want: true,
+		},
+		{
+			name: "second holder used after first is saturated",
+			args: args{
+				requirements: []float64{1.0, 1.0},
+				holders:      []string{"n2", "n1"},
+				capacity:     map[string]float64{"n1": 1.0, "n2": 2.0},
+			},
+			want: true,
+		},
+		{
+			name: "early termination: best holder below requirement",
+			args: args{
+				requirements: []float64{2.0},
+				holders:      []string{"n1"},
+				capacity:     map[string]float64{"n1": 1.0},
+			},
+			want: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ig := &AccumulatedIdleGpus{
-				nodesNameToIdleGpus:   tt.fields.nodesNameToIdleGpus,
-				maxFreeGpuNodesSorted: tt.fields.maxFreeGpuNodesSorted,
-			}
-			got := ig.matchRelevantNodeToTask(tt.args.pendingTaskGpus, tt.args.filterMatchState)
-			if got != tt.want.canAllocate {
-				t.Errorf("matchRelevantNodeToTask() = %v, want %v", got, tt.want)
-			}
-			if !reflect.DeepEqual(
-				tt.args.filterMatchState.nodesToVirtuallyAllocatedGpus, tt.want.nodesToVirtuallyAllocatedGpus) {
-				t.Errorf("matchRelevantNodeToTask().nodesToVirtuallyAllocatedGpus = %v, want %v",
-					tt.args.filterMatchState.nodesToVirtuallyAllocatedGpus,
-					tt.want.nodesToVirtuallyAllocatedGpus)
+			got := greedyMatchRequirements(tt.args.requirements, tt.args.holders,
+				func(node string) float64 { return tt.args.capacity[node] })
+			if got != tt.want {
+				t.Errorf("greedyMatchRequirements() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -248,11 +206,9 @@ func TestAccumulatedIdleGpus_updateWithVictim(t *testing.T) {
 	type args struct {
 		victimTask          *pod_info.PodInfo
 		minIdleGpusRelevant string
-		relevantCacheData   map[common_info.PodID]bool
 	}
 	type want struct {
 		minIdleGpusRelevant   string
-		relevantCacheData     map[common_info.PodID]bool
 		maxFreeGpuNodesSorted []string
 	}
 	tests := []struct {
@@ -278,11 +234,9 @@ func TestAccumulatedIdleGpus_updateWithVictim(t *testing.T) {
 					},
 				},
 				minIdleGpusRelevant: "n2",
-				relevantCacheData:   map[common_info.PodID]bool{},
 			},
 			want: want{
 				minIdleGpusRelevant:   "n1",
-				relevantCacheData:     map[common_info.PodID]bool{"uid1": true},
 				maxFreeGpuNodesSorted: []string{"n1"},
 			},
 		},
@@ -303,11 +257,9 @@ func TestAccumulatedIdleGpus_updateWithVictim(t *testing.T) {
 					},
 				},
 				minIdleGpusRelevant: "n2",
-				relevantCacheData:   map[common_info.PodID]bool{},
 			},
 			want: want{
 				minIdleGpusRelevant:   "n2",
-				relevantCacheData:     map[common_info.PodID]bool{"uid1": true},
 				maxFreeGpuNodesSorted: []string{"n2"},
 			},
 		},
@@ -328,11 +280,9 @@ func TestAccumulatedIdleGpus_updateWithVictim(t *testing.T) {
 					},
 				},
 				minIdleGpusRelevant: "n4",
-				relevantCacheData:   map[common_info.PodID]bool{},
 			},
 			want: want{
 				minIdleGpusRelevant:   "n2",
-				relevantCacheData:     map[common_info.PodID]bool{"uid1": true},
 				maxFreeGpuNodesSorted: []string{"n3", "n1", "n2"},
 			},
 		},
@@ -343,12 +293,8 @@ func TestAccumulatedIdleGpus_updateWithVictim(t *testing.T) {
 				nodesNameToIdleGpus:   tt.fields.nodesNameToIdleGpus,
 				maxFreeGpuNodesSorted: tt.fields.maxFreeGpuNodesSorted,
 			}
-			if got := ig.updateWithVictim(tt.args.victimTask, tt.args.minIdleGpusRelevant, tt.args.relevantCacheData); got != tt.want.minIdleGpusRelevant {
+			if got := ig.updateWithVictim(tt.args.victimTask, tt.args.minIdleGpusRelevant); got != tt.want.minIdleGpusRelevant {
 				t.Errorf("updateWithVictim() = %v, want %v", got, tt.want)
-			}
-			if !reflect.DeepEqual(tt.args.relevantCacheData, tt.want.relevantCacheData) {
-				t.Errorf("updateWithVictim().relevantCacheData = %v, want %v",
-					tt.args.relevantCacheData, tt.want.relevantCacheData)
 			}
 			if !reflect.DeepEqual(ig.maxFreeGpuNodesSorted, tt.want.maxFreeGpuNodesSorted) {
 				t.Errorf("updateWithVictim().maxFreeGpuNodesSorted = %v, want %v",
@@ -416,7 +362,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 								},
 							},
 						},
-					})),
+					}, nil, resource_info.NewResourceVectorMap())),
 					[]*pod_info.PodInfo{},
 					[]*podgroup_info.PodGroupInfo{},
 				),
@@ -453,7 +399,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 								},
 							},
 						},
-					})),
+					}, nil, resource_info.NewResourceVectorMap())),
 					[]*pod_info.PodInfo{},
 					[]*podgroup_info.PodGroupInfo{},
 				),
@@ -495,7 +441,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 								},
 							},
 						},
-					})),
+					}, nil, resource_info.NewResourceVectorMap())),
 					[]*pod_info.PodInfo{},
 					[]*podgroup_info.PodGroupInfo{},
 				),
@@ -535,7 +481,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 								},
 							},
 						},
-					})),
+					}, nil, resource_info.NewResourceVectorMap())),
 					[]*pod_info.PodInfo{},
 					[]*podgroup_info.PodGroupInfo{},
 				),
@@ -563,11 +509,13 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 				nodePodAffinityInfo.EXPECT().AddPod(gomock.Any()).AnyTimes()
 				nodePodAffinityInfo.EXPECT().RemovePod(gomock.Any()).AnyTimes()
 
-				node1 := node_info.NewNodeInfo(&v1.Node{
+				n1 := &v1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "n1",
 					},
-				}, nodePodAffinityInfo)
+				}
+				vectorMap1 := resource_info.BuildResourceVectorMap([]v1.ResourceList{n1.Status.Allocatable})
+				node1 := node_info.NewNodeInfo(n1, nodePodAffinityInfo, vectorMap1)
 
 				potentialVictim1 := pod_info.NewTaskInfo(&v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -593,7 +541,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 					Status: v1.PodStatus{
 						Phase: v1.PodRunning,
 					},
-				})
+				}, nil, resource_info.NewResourceVectorMap())
 
 				node1.AddTask(potentialVictim1)
 
@@ -620,7 +568,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 									},
 								},
 							},
-						})),
+						}, nil, resource_info.NewResourceVectorMap())),
 						[]*pod_info.PodInfo{potentialVictim1},
 						[]*podgroup_info.PodGroupInfo{},
 					),
@@ -650,11 +598,13 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 				nodePodAffinityInfo.EXPECT().AddPod(gomock.Any()).AnyTimes()
 				nodePodAffinityInfo.EXPECT().RemovePod(gomock.Any()).AnyTimes()
 
-				node1 := node_info.NewNodeInfo(&v1.Node{
+				n1 := &v1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "n1",
 					},
-				}, nodePodAffinityInfo)
+				}
+				vectorMap1 := resource_info.BuildResourceVectorMap([]v1.ResourceList{n1.Status.Allocatable})
+				node1 := node_info.NewNodeInfo(n1, nodePodAffinityInfo, vectorMap1)
 
 				potentialVictim1 := pod_info.NewTaskInfo(&v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -680,7 +630,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 					Status: v1.PodStatus{
 						Phase: v1.PodRunning,
 					},
-				})
+				}, nil, resource_info.NewResourceVectorMap())
 
 				node1.AddTask(potentialVictim1)
 
@@ -707,7 +657,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 									},
 								},
 							},
-						})),
+						}, nil, resource_info.NewResourceVectorMap())),
 						[]*pod_info.PodInfo{potentialVictim1},
 						[]*podgroup_info.PodGroupInfo{},
 					),
@@ -734,11 +684,13 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 				nodePodAffinityInfo.EXPECT().AddPod(gomock.Any()).AnyTimes()
 				nodePodAffinityInfo.EXPECT().RemovePod(gomock.Any()).AnyTimes()
 
-				node1 := node_info.NewNodeInfo(&v1.Node{
+				n1 := &v1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "n1",
 					},
-				}, nodePodAffinityInfo)
+				}
+				vectorMap1 := resource_info.BuildResourceVectorMap([]v1.ResourceList{n1.Status.Allocatable})
+				node1 := node_info.NewNodeInfo(n1, nodePodAffinityInfo, vectorMap1)
 
 				recordedVictim := pod_info.NewTaskInfo(&v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -764,7 +716,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 					Status: v1.PodStatus{
 						Phase: v1.PodRunning,
 					},
-				})
+				}, nil, resource_info.NewResourceVectorMap())
 
 				node1.AddTask(recordedVictim)
 
@@ -791,7 +743,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 									},
 								},
 							},
-						})),
+						}, nil, resource_info.NewResourceVectorMap())),
 						[]*pod_info.PodInfo{},
 						[]*podgroup_info.PodGroupInfo{podgroup_info.NewPodGroupInfo("rv1pg", recordedVictim)},
 					),
@@ -838,7 +790,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 								},
 							},
 						},
-					})),
+					}, nil, resource_info.NewResourceVectorMap())),
 					[]*pod_info.PodInfo{},
 					[]*podgroup_info.PodGroupInfo{podgroup_info.NewPodGroupInfo("rv1pg", pod_info.NewTaskInfo(&v1.Pod{
 						ObjectMeta: metav1.ObjectMeta{
@@ -861,7 +813,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 								},
 							},
 						},
-					}))},
+					}, nil, resource_info.NewResourceVectorMap()))},
 				),
 				isFirstScenario: false,
 			},
@@ -905,7 +857,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 								},
 							},
 						},
-					})),
+					}, nil, resource_info.NewResourceVectorMap())),
 					[]*pod_info.PodInfo{},
 					[]*podgroup_info.PodGroupInfo{podgroup_info.NewPodGroupInfo("rv1pg", pod_info.NewTaskInfo(&v1.Pod{
 						ObjectMeta: metav1.ObjectMeta{
@@ -928,7 +880,7 @@ func TestAccumulatedIdleGpus_updateStateWithScenario(t *testing.T) {
 								},
 							},
 						},
-					}))},
+					}, nil, resource_info.NewResourceVectorMap()))},
 				),
 				isFirstScenario: false,
 			},
@@ -1030,11 +982,13 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 				nodePodAffinityInfo.EXPECT().AddPod(gomock.Any()).AnyTimes()
 				nodePodAffinityInfo.EXPECT().RemovePod(gomock.Any()).AnyTimes()
 
-				node1 := node_info.NewNodeInfo(&v1.Node{
+				n1 := &v1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "n1",
 					},
-				}, nodePodAffinityInfo)
+				}
+				vectorMap1 := resource_info.BuildResourceVectorMap([]v1.ResourceList{n1.Status.Allocatable})
+				node1 := node_info.NewNodeInfo(n1, nodePodAffinityInfo, vectorMap1)
 
 				potentialVictim1 := pod_info.NewTaskInfo(&v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1060,7 +1014,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 					Status: v1.PodStatus{
 						Phase: v1.PodRunning,
 					},
-				})
+				}, nil, resource_info.NewResourceVectorMap())
 
 				recordedVictim1 := pod_info.NewTaskInfo(&v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1086,7 +1040,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 					Status: v1.PodStatus{
 						Phase: v1.PodRunning,
 					},
-				})
+				}, nil, resource_info.NewResourceVectorMap())
 
 				node1.AddTask(potentialVictim1)
 				node1.AddTask(recordedVictim1)
@@ -1116,7 +1070,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 										},
 									},
 								},
-							}),
+							}, nil, resource_info.NewResourceVectorMap()),
 							pod_info.NewTaskInfo(&v1.Pod{
 								ObjectMeta: metav1.ObjectMeta{
 									UID:       "uid5",
@@ -1134,7 +1088,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 										},
 									},
 								},
-							}),
+							}, nil, resource_info.NewResourceVectorMap()),
 							pod_info.NewTaskInfo(&v1.Pod{
 								ObjectMeta: metav1.ObjectMeta{
 									UID:       "uid6",
@@ -1152,7 +1106,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 										},
 									},
 								},
-							}),
+							}, nil, resource_info.NewResourceVectorMap()),
 						),
 						[]*pod_info.PodInfo{
 							potentialVictim1,
@@ -1182,11 +1136,13 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 				nodePodAffinityInfo.EXPECT().AddPod(gomock.Any()).AnyTimes()
 				nodePodAffinityInfo.EXPECT().RemovePod(gomock.Any()).AnyTimes()
 
-				node1 := node_info.NewNodeInfo(&v1.Node{
+				n1 := &v1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "n1",
 					},
-				}, nodePodAffinityInfo)
+				}
+				vectorMap1 := resource_info.BuildResourceVectorMap([]v1.ResourceList{n1.Status.Allocatable})
+				node1 := node_info.NewNodeInfo(n1, nodePodAffinityInfo, vectorMap1)
 
 				potentialVictim1 := pod_info.NewTaskInfo(&v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1212,7 +1168,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 					Status: v1.PodStatus{
 						Phase: v1.PodRunning,
 					},
-				})
+				}, nil, resource_info.NewResourceVectorMap())
 
 				recordedVictim1 := pod_info.NewTaskInfo(&v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1238,7 +1194,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 					Status: v1.PodStatus{
 						Phase: v1.PodRunning,
 					},
-				})
+				}, nil, resource_info.NewResourceVectorMap())
 
 				node1.AddTask(potentialVictim1)
 				node1.AddTask(recordedVictim1)
@@ -1268,7 +1224,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 										},
 									},
 								},
-							}),
+							}, nil, resource_info.NewResourceVectorMap()),
 							pod_info.NewTaskInfo(&v1.Pod{
 								ObjectMeta: metav1.ObjectMeta{
 									UID:       "uid5",
@@ -1286,7 +1242,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 										},
 									},
 								},
-							}),
+							}, nil, resource_info.NewResourceVectorMap()),
 							pod_info.NewTaskInfo(&v1.Pod{
 								ObjectMeta: metav1.ObjectMeta{
 									UID:       "uid6",
@@ -1304,7 +1260,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 										},
 									},
 								},
-							}),
+							}, nil, resource_info.NewResourceVectorMap()),
 						),
 						[]*pod_info.PodInfo{
 							potentialVictim1,
@@ -1334,14 +1290,16 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 				nodePodAffinityInfo.EXPECT().AddPod(gomock.Any()).AnyTimes()
 				nodePodAffinityInfo.EXPECT().RemovePod(gomock.Any()).AnyTimes()
 
-				node1 := node_info.NewNodeInfo(&v1.Node{
+				n1 := &v1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "n1",
 						Labels: map[string]string{
 							commonconstants.NvidiaGpuMemory: "100",
 						},
 					},
-				}, nodePodAffinityInfo)
+				}
+				vectorMap1 := resource_info.BuildResourceVectorMap([]v1.ResourceList{n1.Status.Allocatable})
+				node1 := node_info.NewNodeInfo(n1, nodePodAffinityInfo, vectorMap1)
 
 				potentialVictim1 := pod_info.NewTaskInfo(&v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1362,7 +1320,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 					Status: v1.PodStatus{
 						Phase: v1.PodRunning,
 					},
-				})
+				}, nil, resource_info.NewResourceVectorMap())
 
 				node1.AddTask(potentialVictim1)
 
@@ -1390,7 +1348,7 @@ func TestAccumulatedIdleGpus_Filter(t *testing.T) {
 										},
 									},
 								},
-							}),
+							}, nil, resource_info.NewResourceVectorMap()),
 						),
 						[]*pod_info.PodInfo{potentialVictim1},
 						[]*podgroup_info.PodGroupInfo{},

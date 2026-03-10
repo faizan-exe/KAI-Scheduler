@@ -17,10 +17,10 @@ import (
 	runtimeClient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	"github.com/NVIDIA/KAI-scheduler/pkg/common/constants"
-	"github.com/NVIDIA/KAI-scheduler/pkg/nodescaleadjuster/consts"
-	"github.com/NVIDIA/KAI-scheduler/pkg/nodescaleadjuster/scaler"
-	testutils "github.com/NVIDIA/KAI-scheduler/pkg/nodescaleadjuster/test-utils"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/common/constants"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/nodescaleadjuster/consts"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/nodescaleadjuster/scaler"
+	testutils "github.com/kai-scheduler/KAI-scheduler/pkg/nodescaleadjuster/test-utils"
 )
 
 type remainingPod struct {
@@ -1029,6 +1029,23 @@ var _ = Describe("Scale Adjuster Test Suite", func() {
 							Phase: corev1.PodRunning,
 						},
 					},
+				},
+				scalingPods: []*corev1.Pod{},
+				remainingPods: []remainingPod{
+					{
+						namespace: "ns1",
+						name:      "pod1",
+					},
+				},
+				wantErr:      false,
+				isInCoolDown: false,
+			},
+		),
+		Entry(
+			"pending pod without unschedulable condition - nothing to adjust",
+			testData{
+				unschedulablePods: []*corev1.Pod{
+					testutils.CreatePendingFractionPod("pod1", "ns1", "0.7", 1),
 				},
 				scalingPods: []*corev1.Pod{},
 				remainingPods: []remainingPod{

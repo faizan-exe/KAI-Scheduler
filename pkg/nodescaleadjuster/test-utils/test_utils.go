@@ -14,8 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	"github.com/NVIDIA/KAI-scheduler/pkg/common/constants"
-	"github.com/NVIDIA/KAI-scheduler/pkg/nodescaleadjuster/consts"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/common/constants"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/nodescaleadjuster/consts"
 )
 
 const (
@@ -78,6 +78,28 @@ func CreateUnschedulablePod(name, namespace string, annotations map[string]strin
 		},
 	}
 	return pod
+}
+
+func CreatePendingFractionPod(name, namespace string, fractionValue string, numDevices int) *corev1.Pod {
+	annotations := map[string]string{
+		constants.GpuFraction: fractionValue,
+	}
+	if numDevices > 1 {
+		annotations[constants.GpuFractionsNumDevices] = strconv.Itoa(numDevices)
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   namespace,
+			Annotations: annotations,
+		},
+		Spec: corev1.PodSpec{
+			SchedulerName: SchedulerName,
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+		},
+	}
 }
 
 func CreateScalingPod(unschedulablePodNamespace, unschedulablePodName string, numDevices int) *corev1.Pod {

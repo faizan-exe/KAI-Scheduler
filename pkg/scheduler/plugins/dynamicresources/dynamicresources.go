@@ -14,14 +14,14 @@ import (
 	"k8s.io/dynamic-resource-allocation/structured"
 	k8sframework "k8s.io/kubernetes/pkg/scheduler/framework"
 
-	schedulingv1alpha2 "github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v1alpha2"
-	"github.com/NVIDIA/KAI-scheduler/pkg/common/constants"
-	"github.com/NVIDIA/KAI-scheduler/pkg/common/k8s_utils"
-	"github.com/NVIDIA/KAI-scheduler/pkg/common/resources"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/pod_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/podgroup_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/framework"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/log"
+	schedulingv1alpha2 "github.com/kai-scheduler/KAI-scheduler/pkg/apis/scheduling/v1alpha2"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/common/constants"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/common/k8s_utils"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/common/resources"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/pod_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/podgroup_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/framework"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/log"
 )
 
 const (
@@ -68,9 +68,33 @@ func (drap *draPlugin) OnSessionOpen(ssn *framework.Session) {
 		DeallocateFunc: drap.deallocateHandlerFn(ssn),
 	})
 
+	// Restore all claims to the informer's version before processing pending claims.
+	// This reconciles any divergent assume-cache state (latestObj ≠ apiObj) that builds
+	// up across sessions: when deallocateResourceClaim calls AssumeClaimAfterAPICall(nil)
+	// at the same ResourceVersion that the binder already confirmed in etcd, the
+	// assume-cache's "newer-version-only" update rule permanently suppresses the informer
+	// re-sync.  As a result onDelete fires with latestObj=nil, removeDevices is a no-op,
+	// and the device stays in allocatedDevices.ids as a ghost.  Restoring at session open
+	// resets latestObj = apiObj so that onDelete always carries the correct allocation.
+	drap.restoreAllClaims()
 	drap.assumePendingClaims(ssn)
 
 	ssn.AddPrePredicateFn(drap.preFilter)
+}
+
+// restoreAllClaims calls AssumedClaimRestore for every claim currently in the assume-cache.
+// This reconciles divergent assume-cache state (latestObj ≠ apiObj) that accumulates
+// across scheduling sessions, preventing ghost device entries in allocatedDevices.ids.
+func (drap *draPlugin) restoreAllClaims() {
+	claims, err := drap.manager.ResourceClaims().List()
+	if err != nil {
+		log.InfraLogger.Errorf("Failed to list resource claims for state reconciliation: %v", err)
+		return
+	}
+	for _, claim := range claims {
+		drap.manager.ResourceClaims().AssumedClaimRestore(claim.Namespace, claim.Name)
+	}
+	log.InfraLogger.V(4).Infof("Restored %d resource claims to informer state", len(claims))
 }
 
 func (drap *draPlugin) assumePendingClaims(ssn *framework.Session) {
@@ -271,8 +295,12 @@ func (drap *draPlugin) allocateResourceClaim(task *pod_info.PodInfo, podClaim *v
 		}
 
 		result, err := allocator.Allocate(context.Background(), node, []*resourceapi.ResourceClaim{claim})
-		if err != nil || result == nil {
+		if err != nil {
 			return fmt.Errorf("failed to allocate resources: %v", err)
+
+		}
+		if result == nil {
+			return fmt.Errorf("failed to allocate resources: no allocation result")
 		}
 
 		claim.Status.Allocation = &result[0]

@@ -16,11 +16,11 @@ import (
 	ksf "k8s.io/kube-scheduler/framework"
 	"k8s.io/utils/ptr"
 
-	commonconstants "github.com/NVIDIA/KAI-scheduler/pkg/common/constants"
-	"github.com/NVIDIA/KAI-scheduler/pkg/common/resources"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/common_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/node_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/resource_info"
+	commonconstants "github.com/kai-scheduler/KAI-scheduler/pkg/common/constants"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/common/resources"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/common_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/node_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/resource_info"
 )
 
 func Test_podToMaxNodeResourcesFiltering(t *testing.T) {
@@ -385,12 +385,19 @@ func buildNodesFromResourceSlices(slices []*resourceapi.ResourceSlice, nodeBases
 	for nodeName, baseList := range nodeBases {
 		allocatable := resource_info.ResourceFromResourceList(baseList)
 		idle := allocatable.Clone()
+		vectorMap := resource_info.NewResourceVectorMap()
+		vectorMap.AddResourceList(baseList)
 		ni := &node_info.NodeInfo{
-			Name:        nodeName,
-			Allocatable: allocatable,
-			Idle:        idle,
-			Releasing:   resource_info.EmptyResource(),
-			Used:        resource_info.EmptyResource(),
+			Name:              nodeName,
+			Allocatable:       allocatable,
+			Idle:              idle,
+			Releasing:         resource_info.EmptyResource(),
+			Used:              resource_info.EmptyResource(),
+			VectorMap:         vectorMap,
+			AllocatableVector: allocatable.ToVector(vectorMap),
+			IdleVector:        idle.ToVector(vectorMap),
+			ReleasingVector:   resource_info.NewResourceVector(vectorMap),
+			UsedVector:        resource_info.NewResourceVector(vectorMap),
 		}
 		var draGPUCount int64
 		for _, slice := range slicesByNode[nodeName] {
